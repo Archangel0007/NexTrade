@@ -65,6 +65,7 @@ def connect_db(db_path = None) -> sqlite3.Connection:
     logger.debug(f"Connected to database: {db_path}")
     return conn
 
+# --- Helper functions for DB operations --- #
 
 def _quote_identifier(identifier: str) -> str:
     return '"' + identifier.replace('"', '""') + '"'
@@ -86,12 +87,9 @@ def _scrape_date(data: Mapping[str, Any]) -> str:
     return data.split("T", 1)[0]
 
 
-def _period_label(period: str) -> str:
-    return period.split(":", 1)[-1].strip()
-
-
 def _year_end(period: str) -> Optional[int]:
-    match = re.search(r"\b(19|20)\d{2}\b", _period_label(period))
+    cleaned_period = period.split(":", 1)[-1].strip()
+    match = re.search(r"\b(19|20)\d{2}\b", cleaned_period)
     return int(match.group(0)) if match else None
 
 
@@ -107,11 +105,7 @@ def _expand_aliases(candidates: Mapping[str, Any]) -> Dict[str, Any]:
     return normalized_candidates
 
 
-def _select_existing_columns(
-    conn: sqlite3.Connection,
-    table: str,
-    candidates: Mapping[str, Any],
-) -> Dict[str, Any]:
+def _select_existing_columns(conn: sqlite3.Connection,table: str,candidates: Mapping[str, Any],) -> Dict[str, Any]:
     columns = _table_columns(conn, table)
     normalized_candidates = _expand_aliases(candidates)
 
@@ -123,12 +117,8 @@ def _select_existing_columns(
     return row
 
 
-def _insert_or_upsert_row(
-    conn: sqlite3.Connection,
-    table: str,
-    candidates: Mapping[str, Any],
-    conflict_columns: Optional[Sequence[str]] = None,
-) -> None:
+def _insert_or_upsert_row(conn: sqlite3.Connection,table: str,candidates: Mapping[str, Any], conflict_columns: Optional[Sequence[str]] = None,) -> None:
+    
     row = _select_existing_columns(conn, table, candidates)
     if not row:
         return
@@ -161,10 +151,7 @@ def _insert_or_upsert_row(
 def upsert_company(conn: sqlite3.Connection, data: Mapping[str, Any]) -> None:
     symbol = str(data["symbol"])
     company_info = data.get("company_info", {})
-    top_ratios = data.get("top_ratios", {})
 
-    # companies: Map company_info and top_ratios to schema columns
-    # category, sector remain NULL unless provided
     candidates: Dict[str, Any] = {
         "symbol": symbol,
         "name": company_info.get("company_name"),
@@ -181,7 +168,6 @@ def upsert_snapshot_metrics(conn: sqlite3.Connection, data: Mapping[str, Any]) -
     symbol = str(data["symbol"])
     top_ratios = data.get("top_ratios", {})
 
-    # snapshot_metrics: current snapshot from top_ratios
     candidates: Dict[str, Any] = {
         "symbol": symbol,
         "market_cap": top_ratios.get("market_cap"),
@@ -207,8 +193,6 @@ def insert_ratios(conn: sqlite3.Connection, data: Mapping[str, Any]) -> None:
     symbol = str(data["symbol"])
     ratios_history = data.get("ratios_history", {})
 
-    # ratios: Screener ratios_history is period-keyed. Each annual period
-    # becomes one row keyed by (symbol, year).
     for period, metrics in ratios_history.items():
         year = _year_end(period)
         if year is None or "ttm" in period.lower():
@@ -237,9 +221,6 @@ def insert_profit_loss(conn: sqlite3.Connection, data: Mapping[str, Any]) -> Non
     symbol = str(data["symbol"])
     profit_loss = data.get("profit_loss", {})
 
-    # profit_and_loss: Screener profit_loss is period-keyed. Each annual period
-    # becomes one row keyed by (symbol, year). TTM is skipped because it is
-    # not a fiscal year end.
     for period, metrics in profit_loss.items():
         year = _year_end(period)
         if year is None or "ttm" in period.lower():
@@ -274,8 +255,6 @@ def insert_balance_sheet(conn: sqlite3.Connection, data: Mapping[str, Any]) -> N
     symbol = str(data["symbol"])
     balance_sheet = data.get("balance_sheet", {})
 
-    # balance_sheet: each Screener annual balance-sheet column becomes one row
-    # keyed by (symbol, year).
     for period, metrics in balance_sheet.items():
         year = _year_end(period)
         if year is None:
@@ -313,9 +292,6 @@ def insert_shareholding(conn: sqlite3.Connection, data: Mapping[str, Any]) -> No
         if period.startswith("quarterly:")
     ]
     items = quarterly_items or list(shareholding.items())
-
-    # shareholding_pattern: quarterly Screener shareholding periods map to year.
-    # Extract year from period date.
     for period, metrics in items:
         year = _year_end(period)
         if year is None:
@@ -343,8 +319,6 @@ def upsert_price_history(conn: sqlite3.Connection, data: Mapping[str, Any]) -> N
     symbol = str(data["symbol"])
     top_ratios = data.get("top_ratios", {})
 
-    # price_history: Screener page gives current price, not OHLC history. Store
-    # current_price as close_price for the scrape date; OHLC/volume remain NULL.
     candidates: Dict[str, Any] = {
         "symbol": symbol,
         "date": _scrape_date(data),
@@ -364,20 +338,6 @@ def upsert_price_history(conn: sqlite3.Connection, data: Mapping[str, Any]) -> N
 
 
 def save_company_to_db(conn: sqlite3.Connection, data: Mapping[str, Any]) -> None:
-    """
-    Main function to save all company data to database.
-    
-    Inserts/updates company information across all tables:
-    - companies: basic company info
-    - profit_and_loss: financial metrics
-    - balance_sheet: balance sheet data
-    - shareholder_pattern: shareholding data
-    - price_history: current price snapshot
-    
-    Args:
-        conn: SQLite database connection
-        data: Scraped company data dictionary
-    """
     try:
         symbol = str(data.get("symbol", "UNKNOWN"))
         
